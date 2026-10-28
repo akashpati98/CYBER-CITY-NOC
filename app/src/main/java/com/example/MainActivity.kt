@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AlertSeverity
+import com.example.model.DeviceStatus
 import com.example.ui.NocNavTab
 import com.example.ui.NocViewModel
 import com.example.ui.screens.*
@@ -43,12 +44,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme(darkTheme = false) {
-                val uiState by viewModel.uiState.collectAsState()
-                val alerts by viewModel.alerts.collectAsState()
-                val unackedCount = alerts.count { !it.isAcknowledged }
-                val hasCritical = alerts.any { it.severity == AlertSeverity.CRITICAL && !it.isAcknowledged }
+            val uiState by viewModel.uiState.collectAsState()
+            val alerts by viewModel.alerts.collectAsState()
+            val olts by viewModel.olts.collectAsState()
+            val onus by viewModel.onus.collectAsState()
 
+            val offlineOlts = olts.filter { it.status == DeviceStatus.OFFLINE }
+            val unackedCount = alerts.count { !it.isAcknowledged }
+            val hasCritical = alerts.any { it.severity == AlertSeverity.CRITICAL && !it.isAcknowledged } || offlineOlts.isNotEmpty()
+
+            MyApplicationTheme(darkTheme = uiState.isDarkMode) {
                 BackHandler(enabled = uiState.currentTab != NocNavTab.DASHBOARD) {
                     viewModel.selectTab(NocNavTab.DASHBOARD)
                 }
@@ -57,74 +62,203 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     containerColor = MaterialTheme.colorScheme.background,
                     topBar = {
-                        TopAppBar(
-                            title = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(MaterialTheme.colorScheme.primary),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.NetworkCheck,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = "Cyber City",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "MONITORING TOOL",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontSize = 9.sp,
-                                            letterSpacing = 1.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-                            },
-                            actions = {
-                                // Live NOC status pill
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(if (hasCritical) Color(0xFFFFE4E6) else Color(0xFFECFDF5))
-                                        .clickable { viewModel.selectTab(NocNavTab.ALERTS) }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            TopAppBar(
+                                title = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Box(
                                             modifier = Modifier
-                                                .size(6.dp)
-                                                .clip(CircleShape)
-                                                .background(if (hasCritical) NocCriticalRed else NocSuccessGreen)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (hasCritical) "ALERT" else "ONLINE",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (hasCritical) NocCriticalRed else NocSuccessGreen
+                                                .size(28.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(MaterialTheme.colorScheme.primary),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.NetworkCheck,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                text = "Cyber City",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "MONITORING TOOL",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                letterSpacing = 1.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                },
+                                actions = {
+                                    // Dark Mode Switch Pill
+                                    Surface(
+                                        onClick = { viewModel.toggleDarkMode() },
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier.testTag("dark_mode_toggle_button")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (uiState.isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                                contentDescription = "Toggle Dark Mode",
+                                                tint = if (uiState.isDarkMode) NocWarningAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (uiState.isDarkMode) "DARK" else "LIGHT",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    // SNMP & Port Settings Button
+                                    IconButton(
+                                        onClick = { viewModel.selectTab(NocNavTab.SETTINGS) },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .testTag("top_bar_settings_btn")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Settings,
+                                            contentDescription = "SNMP & Port Settings",
+                                            tint = if (uiState.currentTab == NocNavTab.SETTINGS)
+                                                MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                            },
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                titleContentColor = MaterialTheme.colorScheme.onSurface
+
+                                    Spacer(modifier = Modifier.width(4.dp))
+
+                                    // Live NOC status pill
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (hasCritical) Color(0xFFFFE4E6) else Color(0xFFECFDF5))
+                                            .clickable { viewModel.selectTab(NocNavTab.ALERTS) }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .clip(CircleShape)
+                                                    .background(if (hasCritical) NocCriticalRed else NocSuccessGreen)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (offlineOlts.isNotEmpty()) "OLT OFFLINE" else if (hasCritical) "ALERT" else "ONLINE",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (hasCritical) NocCriticalRed else NocSuccessGreen
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                },
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                                )
                             )
-                        )
+
+                            // Global Emergency OLT Offline Alert Banner
+                            offlineOlts.forEach { offlineOlt ->
+                                val impactedCount = onus.count { it.oltId == offlineOlt.id }
+                                Surface(
+                                    color = NocCriticalRed,
+                                    contentColor = Color.White,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("global_olt_offline_alert_banner")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Warning,
+                                                contentDescription = "OLT Offline Alert",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "OLT OFFLINE ALERT: ${offlineOlt.name} (${offlineOlt.ipAddress})",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                                Text(
+                                                    text = "100% Packet Loss • $impactedCount Subscriber ONUs Impacted • Email & Webhook Sent",
+                                                    fontSize = 10.sp,
+                                                    color = Color.White.copy(alpha = 0.92f)
+                                                )
+                                            }
+                                        }
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Surface(
+                                                onClick = {
+                                                    viewModel.selectOlt(offlineOlt.id)
+                                                    viewModel.selectTab(NocNavTab.OLT_ONU)
+                                                },
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = Color.White.copy(alpha = 0.2f),
+                                                modifier = Modifier.testTag("global_olt_offline_view_btn")
+                                            ) {
+                                                Text(
+                                                    text = "Inspect",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+
+                                            Surface(
+                                                onClick = { viewModel.restoreOltOnline(offlineOlt.id) },
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = Color.White,
+                                                modifier = Modifier.testTag("global_olt_offline_restore_btn")
+                                            ) {
+                                                Text(
+                                                    text = "Restore OLT",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = NocCriticalRed,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     },
                     bottomBar = {
                         NavigationBar(
@@ -203,7 +337,7 @@ class MainActivity : ComponentActivity() {
                             )
 
                             NavigationBarItem(
-                                selected = uiState.currentTab == NocNavTab.TOOLS || uiState.currentTab == NocNavTab.ALERTS,
+                                selected = uiState.currentTab == NocNavTab.TOOLS || uiState.currentTab == NocNavTab.ALERTS || uiState.currentTab == NocNavTab.SETTINGS,
                                 onClick = { viewModel.selectTab(NocNavTab.TOOLS) },
                                 icon = {
                                     BadgedBox(
@@ -263,6 +397,10 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(innerPadding)
                             )
                             NocNavTab.TOOLS -> DiagnosticsScreen(
+                                viewModel = viewModel,
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                            NocNavTab.SETTINGS -> SettingsScreen(
                                 viewModel = viewModel,
                                 modifier = Modifier.padding(innerPadding)
                             )

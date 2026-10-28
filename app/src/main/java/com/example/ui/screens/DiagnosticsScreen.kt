@@ -1,5 +1,18 @@
 package com.example.ui.screens
 
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
+import android.net.http.SslError
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,12 +29,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.*
+import com.example.ui.NocNavTab
 import com.example.ui.NocViewModel
 import com.example.ui.theme.*
 
@@ -47,20 +64,37 @@ fun DiagnosticsScreen(
     ) {
         // Header
         item {
-            Column {
-                Text(
-                    text = "NETWORK TESTING & DIAGNOSTICS SUITE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    text = "IP Gateway • Speed Test • Latency • Traceroute • DNS",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "NETWORK TESTING & DIAGNOSTICS SUITE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "Speedtest.net • Fast.com • IP Gateway • Latency • DNS",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.selectTab(NocNavTab.SETTINGS) },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("open_snmp_settings_button")
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("SNMP & Ports", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
@@ -249,9 +283,14 @@ fun DiagnosticsScreen(
         }
 
         // ==========================================
-        // 2. SPEED TEST (DOWNLOAD / UPLOAD / PING / JITTER)
+        // 2. SPEED TEST (SPEEDTEST.NET • FAST.COM • CORE BNG)
         // ==========================================
         item {
+            val context = LocalContext.current
+            var speedWebView by remember { mutableStateOf<WebView?>(null) }
+            var speedWebProgress by remember { mutableIntStateOf(100) }
+            var speedWebReloadNonce by remember { mutableIntStateOf(0) }
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -266,7 +305,10 @@ fun DiagnosticsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
@@ -284,7 +326,7 @@ fun DiagnosticsScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "Bandwidth Speed Test",
+                                    text = "Speedtest.net & Fast.com Bandwidth Test",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -292,10 +334,14 @@ fun DiagnosticsScreen(
                                 Text(
                                     text = speedTest.serverName,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = NocTextSecondary
+                                    color = NocTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
+
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         Button(
                             onClick = { viewModel.startSpeedTest() },
@@ -320,7 +366,105 @@ fun DiagnosticsScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Speed Test Provider Selector Chips: Speedtest.net, Fast.com, Core BNG
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = uiState.selectedSpeedTestProvider == SpeedTestProvider.SPEEDTEST_NET,
+                            onClick = { viewModel.selectSpeedTestProvider(SpeedTestProvider.SPEEDTEST_NET) },
+                            label = {
+                                Text(
+                                    text = "Speedtest.net",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Speed,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            modifier = Modifier.testTag("speedtest_provider_speedtest_net")
+                        )
+
+                        FilterChip(
+                            selected = uiState.selectedSpeedTestProvider == SpeedTestProvider.FAST_COM,
+                            onClick = { viewModel.selectSpeedTestProvider(SpeedTestProvider.FAST_COM) },
+                            label = {
+                                Text(
+                                    text = "Fast.com",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            modifier = Modifier.testTag("speedtest_provider_fast_com")
+                        )
+
+                        FilterChip(
+                            selected = uiState.selectedSpeedTestProvider == SpeedTestProvider.CYBER_CITY_BNG,
+                            onClick = { viewModel.selectSpeedTestProvider(SpeedTestProvider.CYBER_CITY_BNG) },
+                            label = {
+                                Text(
+                                    text = "Core BNG",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            modifier = Modifier.testTag("speedtest_provider_bng")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Direct 1-Tap Run Buttons for Speedtest.net & Fast.com
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { viewModel.startSpeedTest(SpeedTestProvider.SPEEDTEST_NET) },
+                            enabled = !speedTest.isRunning,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("run_speedtest_net_button")
+                        ) {
+                            Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Run Speedtest.net", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        FilledTonalButton(
+                            onClick = { viewModel.startSpeedTest(SpeedTestProvider.FAST_COM) },
+                            enabled = !speedTest.isRunning,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("run_fast_com_button")
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Run Fast.com", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     if (speedTest.isRunning) {
                         LinearProgressIndicator(
@@ -408,6 +552,169 @@ fun DiagnosticsScreen(
                                     color = NocTextSecondary
                                 )
                             }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Live Embedded Web Runner & External Browser Bar for Speedtest.net & Fast.com
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Live Web Speed Test (Speedtest.net & Fast.com)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = uiState.activeWebSpeedTestProvider.webUrl,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.toggleLiveSpeedTestWebVisible() },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.height(30.dp).testTag("toggle_speedtest_webview_button")
+                            ) {
+                                Text(
+                                    text = if (uiState.isLiveSpeedTestWebVisible) "Hide Web" else "Show Web",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    speedWebReloadNonce++
+                                    speedWebView?.loadUrl(uiState.activeWebSpeedTestProvider.webUrl)
+                                },
+                                modifier = Modifier.size(30.dp).testTag("reload_speedtest_webview_button")
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Reload Speed Test Web", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Switcher & External Launch Row for Speedtest.net (https://www.speedtest.net/) & Fast.com (https://fast.com/)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.selectWebSpeedTestProvider(SpeedTestProvider.SPEEDTEST_NET) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (uiState.activeWebSpeedTestProvider == SpeedTestProvider.SPEEDTEST_NET)
+                                    MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (uiState.activeWebSpeedTestProvider == SpeedTestProvider.SPEEDTEST_NET)
+                                    Color.White
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f).testTag("web_tab_speedtest_net")
+                        ) {
+                            Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SPEEDTEST.NET", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = { viewModel.selectWebSpeedTestProvider(SpeedTestProvider.FAST_COM) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (uiState.activeWebSpeedTestProvider == SpeedTestProvider.FAST_COM)
+                                    Color(0xFFE50914)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (uiState.activeWebSpeedTestProvider == SpeedTestProvider.FAST_COM)
+                                    Color.White
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f).testTag("web_tab_fast_com")
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("FAST.COM", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SpeedTestProvider.SPEEDTEST_NET.webUrl)))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Opening https://www.speedtest.net/", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.weight(1f).height(32.dp).testTag("open_external_speedtest_net_button")
+                        ) {
+                            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Open Speedtest.net", fontSize = 10.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SpeedTestProvider.FAST_COM.webUrl)))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Opening https://fast.com/", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.weight(1f).height(32.dp).testTag("open_external_fast_com_button")
+                        ) {
+                            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Open Fast.com", fontSize = 10.sp)
+                        }
+                    }
+
+                    if (uiState.isLiveSpeedTestWebVisible) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (speedWebProgress in 1..99) {
+                            LinearProgressIndicator(
+                                progress = { (speedWebProgress / 100f).coerceIn(0.05f, 1f) },
+                                modifier = Modifier.fillMaxWidth().height(2.dp)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(340.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .testTag("speedtest_live_webview_container")
+                        ) {
+                            SpeedTestEmbeddedWebView(
+                                targetUrl = uiState.activeWebSpeedTestProvider.webUrl,
+                                reloadNonce = speedWebReloadNonce,
+                                onWebViewCreated = { speedWebView = it },
+                                onProgressChanged = { speedWebProgress = it }
+                            )
                         }
                     }
                 }
@@ -1150,3 +1457,81 @@ fun PingResultBadge(status: HostPingStatus) {
         }
     }
 }
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun SpeedTestEmbeddedWebView(
+    targetUrl: String,
+    reloadNonce: Int,
+    onWebViewCreated: (WebView) -> Unit,
+    onProgressChanged: (Int) -> Unit
+) {
+    val loadKey = "${targetUrl}_$reloadNonce"
+
+    AndroidView(
+        factory = { context ->
+            WebView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                    setSupportZoom(true)
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    cacheMode = WebSettings.LOAD_DEFAULT
+                    userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                }
+
+                webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        onProgressChanged(100)
+                    }
+
+                    @SuppressLint("WebViewClientOnReceivedSslError")
+                    override fun onReceivedSslError(
+                        view: WebView?,
+                        handler: SslErrorHandler?,
+                        error: SslError?
+                    ) {
+                        handler?.proceed()
+                    }
+                }
+
+                webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                        onProgressChanged(newProgress)
+                    }
+                }
+
+                onWebViewCreated(this)
+                tag = loadKey
+                loadUrl(targetUrl)
+            }
+        },
+        update = { webView ->
+            if (webView.tag != loadKey) {
+                webView.tag = loadKey
+                webView.loadUrl(targetUrl)
+            }
+        },
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("speedtest_live_webview")
+    )
+}
+

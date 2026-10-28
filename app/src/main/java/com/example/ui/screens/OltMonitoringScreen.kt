@@ -214,6 +214,12 @@ fun OltMonitoringScreen(
                 item {
                     OltStatusCard(
                         olt = activeOlt,
+                        onProbeLive = { viewModel.probeSingleOltLive(activeOlt.id) },
+                        onOpenSnmpPortSettings = {
+                            viewModel.selectSettingsOlt(activeOlt.id)
+                            viewModel.selectTab(com.example.ui.NocNavTab.SETTINGS)
+                        },
+                        onRestoreOnline = { viewModel.restoreOltOnline(activeOlt.id) },
                         onDelete = { viewModel.deleteOlt(activeOlt.id) }
                     )
                 }
@@ -873,14 +879,24 @@ fun VsolOntSetupDialog(
 @Composable
 fun OltStatusCard(
     olt: OltDevice,
+    onProbeLive: () -> Unit = {},
+    onOpenSnmpPortSettings: () -> Unit = {},
+    onRestoreOnline: () -> Unit = {},
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isOffline = olt.status == DeviceStatus.OFFLINE
     Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("olt_status_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isOffline) NocCriticalRed.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface
+        ),
         shape = RoundedCornerShape(16.dp),
-        border = CardDefaults.outlinedCardBorder()
+        border = if (isOffline)
+            androidx.compose.foundation.BorderStroke(1.5.dp, NocCriticalRed)
+        else CardDefaults.outlinedCardBorder()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -888,24 +904,43 @@ fun OltStatusCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
+                            .background(if (isOffline) Color(0xFFFFE4E6) else MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.Hub, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            imageVector = if (isOffline) Icons.Default.Warning else Icons.Default.Hub,
+                            contentDescription = null,
+                            tint = if (isOffline) NocCriticalRed else MaterialTheme.colorScheme.primary
+                        )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                        Text(
-                            text = olt.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = olt.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isOffline) NocCriticalRed else MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                color = if (isOffline) NocCriticalRed else Color(0xFFECFDF5),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = if (isOffline) "OFFLINE ALERT" else "ONLINE",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isOffline) Color.White else NocSuccessGreen,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         Text(
                             text = "${olt.vendor.displayName} ${olt.model} • ${olt.ipAddress}:${olt.port}",
                             style = MaterialTheme.typography.bodySmall,
@@ -920,6 +955,44 @@ fun OltStatusCard(
                 }
             }
 
+            if (isOffline) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(NocCriticalRed)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "CRITICAL: OLT OFFLINE ALERT",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "SNMP/ICMP unreachable (100% packet loss). Email & Webhook alert dispatched.",
+                            fontSize = 10.sp,
+                            color = Color.White.copy(alpha = 0.9f)
+                        )
+                    }
+                    Button(
+                        onClick = onRestoreOnline,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = NocCriticalRed),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("restore_olt_online_btn")
+                    ) {
+                        Text("Restore Online", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(14.dp))
 
             // Resource indicators
@@ -927,19 +1000,55 @@ fun OltStatusCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                MetricPill(label = "CPU LOAD", value = "${olt.cpuUsage}%", isAlert = olt.cpuUsage > 75)
-                MetricPill(label = "BW UTIL", value = "${String.format("%.1f", olt.bandwidthUtilizationPercent)}%", isAlert = olt.bandwidthUtilizationPercent > 80f)
-                MetricPill(label = "LATENCY", value = "${String.format("%.1f", olt.avgLatencyMs)}ms", isAlert = olt.avgLatencyMs > 30f)
-                MetricPill(label = "PKT LOSS", value = "${String.format("%.2f", olt.packetLossPercent)}%", isAlert = olt.packetLossPercent > 1.0f)
+                MetricPill(label = "CPU LOAD", value = "${olt.cpuUsage}%", isAlert = olt.cpuUsage > 75 || isOffline)
+                MetricPill(label = "BW UTIL", value = "${String.format("%.1f", olt.bandwidthUtilizationPercent)}%", isAlert = olt.bandwidthUtilizationPercent > 80f || isOffline)
+                MetricPill(label = "LATENCY", value = if (isOffline) "TIMEOUT" else "${String.format("%.1f", olt.avgLatencyMs)}ms", isAlert = olt.avgLatencyMs > 30f || isOffline)
+                MetricPill(label = "PKT LOSS", value = "${String.format("%.2f", olt.packetLossPercent)}%", isAlert = olt.packetLossPercent > 1.0f || isOffline)
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Location: ${olt.location} • ${olt.totalPonPorts} PON Ports (SNMP: ${olt.snmpCommunity})",
-                style = MaterialTheme.typography.bodySmall,
-                color = NocTextMuted,
-                fontSize = 11.sp
-            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Location: ${olt.location} • ${olt.totalPonPorts} PON Ports (SNMP: ${olt.snmpCommunity})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NocTextMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(
+                        onClick = onProbeLive,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(28.dp)
+                            .testTag("probe_olt_live_btn")
+                    ) {
+                        Icon(Icons.Default.NetworkCheck, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Live Probe", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenSnmpPortSettings,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(28.dp)
+                            .testTag("configure_olt_snmp_ports_btn")
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("SNMP & Ports", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }

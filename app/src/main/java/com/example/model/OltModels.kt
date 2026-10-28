@@ -252,3 +252,60 @@ data class VsolBatchAuditResult(
     val averageRxDbm: Float,
     val scanTimestamp: Long = System.currentTimeMillis()
 )
+
+enum class PonSfpOpticalClass(
+    val label: String,
+    val nominalTxMinDbm: Float,
+    val nominalTxMaxDbm: Float,
+    val receiverSensitivityDbm: Float
+) {
+    CLASS_B_PLUS("GPON Class B+ (+1.5 to +5.0 dBm)", 1.5f, 5.0f, -28.0f),
+    CLASS_C_PLUS("GPON Class C+ (+3.0 to +7.0 dBm)", 3.0f, 7.0f, -32.0f),
+    CLASS_C_DOUBLE_PLUS("XGS/GPON Class C++ (+5.0 to +9.0 dBm)", 5.0f, 9.0f, -35.0f)
+}
+
+data class PonPortDiagnosticMetrics(
+    val portId: String,
+    val portName: String,
+    val adminEnabled: Boolean,
+    val operUp: Boolean,
+    val sfpClass: String,
+    val sfpVendorPart: String,
+    val wavelengthNm: Int = 1490,
+    val txPowerDbm: Float,
+    val avgOnuRxPowerDbm: Float,
+    val sfpTemperatureCelsius: Float,
+    val sfpSupplyVoltageVolts: Float,
+    val laserBiasCurrentMa: Float,
+    val bip8ErrorCount: Long,
+    val crcErrorCount: Long,
+    val activeOnus: Int,
+    val maxSplitCapacity: Int,
+    val diagnosticHealth: String
+)
+
+data class OltHardwareDiagnosticReport(
+    val oltId: String,
+    val oltName: String,
+    val ipAddress: String,
+    val managementPort: Int,
+    val snmpCommunityUsed: String,
+    val snmpRwCommunityUsed: String,
+    val snmpUdpPort: Int = 161,
+    val snmpHandshakeSuccess: Boolean = true,
+    val snmpResponseTimeMs: Long = 4L,
+    val sysObjectIdOid: String,
+    val firmwareVersion: String,
+    val chassisBackplaneTempC: Float,
+    val cpuLoadPercent: Int,
+    val memoryUsagePercent: Int,
+    val psuRailAVoltage: Float = 48.2f,
+    val psuRailBVoltage: Float = 48.1f,
+    val psuRedundancyStatus: String = "Dual -48V DC Redundant OK",
+    val fanTrayRpm: List<Int> = listOf(4250, 4280, 4210, 4300),
+    val opticalClockSyncState: String = "Locked (ITU-T G.8262 SyncE)",
+    val ponPortDiagnostics: List<PonPortDiagnosticMetrics> = emptyList(),
+    val summaryRecommendation: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+

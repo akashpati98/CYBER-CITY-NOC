@@ -15,11 +15,13 @@ enum class NocNavTab(val title: String) {
     LIVE_MAP("Customer Live Map"),
     ISP_PORTALS("ISP FMS"),
     ALERTS("Alerts"),
-    TOOLS("Tools & Probe")
+    TOOLS("Tools & Probe"),
+    SETTINGS("SNMP & Port Settings")
 }
 
 data class NocUiState(
     val currentTab: NocNavTab = NocNavTab.DASHBOARD,
+    val isDarkMode: Boolean = false,
     val selectedOltId: String? = null,
     val selectedPonPort: String? = null,
     val onuSearchQuery: String = "",
@@ -39,14 +41,20 @@ data class NocUiState(
     val manualPingHost: String = "",
     // What Is My IP & Gateway State
     val myIpAndGateway: MyIpAndGatewayInfo = MyIpAndGatewayInfo(),
-    // Speed Test State
+    // Speed Test State (Speedtest.net, Fast.com & Core BNG)
+    val selectedSpeedTestProvider: SpeedTestProvider = SpeedTestProvider.SPEEDTEST_NET,
+    val activeWebSpeedTestProvider: SpeedTestProvider = SpeedTestProvider.SPEEDTEST_NET,
+    val isLiveSpeedTestWebVisible: Boolean = true,
     val speedTestState: SpeedTestState = SpeedTestState(
-        downloadMbps = 512.4f,
-        uploadMbps = 398.2f,
+        downloadMbps = 548.6f,
+        uploadMbps = 420.4f,
         pingMs = 3.2f,
         jitterMs = 0.8f,
         packetLossPercent = 0.0f,
-        phaseLabel = "Ready • Last verified Gigabit Fiber BNG"
+        provider = SpeedTestProvider.SPEEDTEST_NET,
+        providerUrl = SpeedTestProvider.SPEEDTEST_NET.webUrl,
+        serverName = SpeedTestProvider.SPEEDTEST_NET.defaultServerName,
+        phaseLabel = "Ready • Speedtest.net & Fast.com Gigabit Engine"
     ),
     // Traceroute State
     val tracerouteTargetInput: String = "8.8.8.8",
@@ -109,7 +117,16 @@ data class NocUiState(
     val editingPortal: IspPortal? = null,
     val isVsolRouterConfigDialogOpen: Boolean = false,
     val activeVsolRouterConfig: VsolRouterConfig = VsolRouterConfig(),
-    val vsolConfigSuccessMessage: String? = null
+    val vsolConfigSuccessMessage: String? = null,
+    // SNMP Community Strings & OLT Port Configuration Settings State
+    val globalSnmpReadCommunity: String = "public",
+    val globalSnmpWriteCommunity: String = "private_noc_rw",
+    val globalSnmpUdpPort: Int = 161,
+    val snmpVersion: String = "SNMPv2c",
+    val selectedSettingsOltId: String = "olt-huawei-01",
+    val hardwareDiagnosticReport: OltHardwareDiagnosticReport? = null,
+    val isRunningHardwareDiag: Boolean = false,
+    val settingsFeedbackMessage: String? = null
 )
 
 class NocViewModel(
@@ -142,6 +159,14 @@ class NocViewModel(
 
     fun selectTab(tab: NocNavTab) {
         _uiState.update { it.copy(currentTab = tab) }
+    }
+
+    fun toggleDarkMode() {
+        _uiState.update { it.copy(isDarkMode = !it.isDarkMode) }
+    }
+
+    fun setDarkMode(enabled: Boolean) {
+        _uiState.update { it.copy(isDarkMode = enabled) }
     }
 
     fun selectOlt(oltId: String?) {
@@ -226,6 +251,8 @@ class NocViewModel(
     // Simulation / testing triggers
     fun triggerOpticalDegradation(onuId: String) = repository.triggerOpticalDegradation(onuId)
     fun triggerHighOpticalOverload(onuId: String) = repository.triggerHighOpticalOverload(onuId)
+    fun triggerOltOfflineAlert(oltId: String = "olt-zte-02") = repository.triggerOltOfflineAlert(oltId)
+    fun restoreOltOnline(oltId: String) = repository.restoreOltOnline(oltId)
     fun triggerDeviceUnreachable(targetId: String = "olt-zte-02", isOlt: Boolean = true) =
         repository.triggerDeviceUnreachable(targetId, isOlt)
     fun sendTestEmailAndWebhookAlert() = repository.sendTestEmailAndWebhookAlert()
@@ -305,10 +332,46 @@ class NocViewModel(
         }
     }
 
-    fun startSpeedTest() {
+    fun selectSpeedTestProvider(provider: SpeedTestProvider) {
+        _uiState.update {
+            it.copy(
+                selectedSpeedTestProvider = provider,
+                activeWebSpeedTestProvider = if (provider == SpeedTestProvider.FAST_COM) SpeedTestProvider.FAST_COM else SpeedTestProvider.SPEEDTEST_NET,
+                speedTestState = it.speedTestState.copy(
+                    provider = provider,
+                    providerUrl = provider.webUrl,
+                    serverName = provider.defaultServerName,
+                    phaseLabel = "Ready • Selected ${provider.displayName} (${provider.webUrl})"
+                )
+            )
+        }
+    }
+
+    fun selectWebSpeedTestProvider(provider: SpeedTestProvider) {
+        _uiState.update {
+            it.copy(
+                activeWebSpeedTestProvider = provider,
+                selectedSpeedTestProvider = provider,
+                isLiveSpeedTestWebVisible = true
+            )
+        }
+    }
+
+    fun toggleLiveSpeedTestWebVisible() {
+        _uiState.update { it.copy(isLiveSpeedTestWebVisible = !it.isLiveSpeedTestWebVisible) }
+    }
+
+    fun startSpeedTest(customProvider: SpeedTestProvider? = null) {
         if (_uiState.value.speedTestState.isRunning) return
+        val provider = customProvider ?: _uiState.value.selectedSpeedTestProvider
+        _uiState.update {
+            it.copy(
+                selectedSpeedTestProvider = provider,
+                activeWebSpeedTestProvider = if (provider == SpeedTestProvider.FAST_COM) SpeedTestProvider.FAST_COM else SpeedTestProvider.SPEEDTEST_NET
+            )
+        }
         viewModelScope.launch {
-            RealNetworkProbe.runSpeedTest { progressState ->
+            RealNetworkProbe.runSpeedTest(provider = provider) { progressState ->
                 _uiState.update { it.copy(speedTestState = progressState) }
             }
         }
@@ -572,4 +635,152 @@ class NocViewModel(
     fun fetchAndCalculateAllTelemetry() {
         repository.fetchAndCalculateAllTelemetry()
     }
+
+    // --- SNMP Community Strings & OLT Port Hardware Diagnostics Settings ---
+
+    fun selectSettingsOlt(oltId: String) {
+        _uiState.update { it.copy(selectedSettingsOltId = oltId, settingsFeedbackMessage = null) }
+    }
+
+    fun updateGlobalSnmpSettings(
+        readCommunity: String,
+        writeCommunity: String,
+        udpPort: Int,
+        version: String = "SNMPv2c"
+    ) {
+        _uiState.update {
+            it.copy(
+                globalSnmpReadCommunity = readCommunity.trim().ifBlank { "public" },
+                globalSnmpWriteCommunity = writeCommunity.trim().ifBlank { "private_noc_rw" },
+                globalSnmpUdpPort = udpPort.coerceIn(1, 65535),
+                snmpVersion = version
+            )
+        }
+    }
+
+    fun applyGlobalSnmpCommunityToAllOlts(
+        readCommunity: String = _uiState.value.globalSnmpReadCommunity,
+        writeCommunity: String = _uiState.value.globalSnmpWriteCommunity,
+        udpPort: Int = _uiState.value.globalSnmpUdpPort
+    ) {
+        val cleanRo = readCommunity.trim().ifBlank { "public" }
+        val cleanRw = writeCommunity.trim().ifBlank { "private_noc_rw" }
+        _uiState.update {
+            it.copy(
+                globalSnmpReadCommunity = cleanRo,
+                globalSnmpWriteCommunity = cleanRw,
+                globalSnmpUdpPort = udpPort.coerceIn(1, 65535),
+                settingsFeedbackMessage = "Applied SNMP Read Community '$cleanRo' & Write '$cleanRw' (UDP :$udpPort) to all OLTs."
+            )
+        }
+        repository.applyGlobalSnmpCommunityToAllOlts(cleanRo)
+    }
+
+    fun saveOltSnmpAndPortConfig(
+        oltId: String,
+        ipAddress: String,
+        port: Int,
+        snmpCommunity: String,
+        totalPonPorts: Int
+    ) {
+        repository.updateOltSnmpAndPortConfig(
+            oltId = oltId,
+            ipAddress = ipAddress,
+            port = port,
+            snmpCommunity = snmpCommunity,
+            totalPonPorts = totalPonPorts
+        )
+        _uiState.update {
+            it.copy(
+                settingsFeedbackMessage = "Saved SNMP community '${snmpCommunity.trim().ifBlank { "public" }}' & Port :$port ($totalPonPorts PON ports) for OLT $oltId."
+            )
+        }
+    }
+
+    fun savePonPortConfig(
+        portId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int,
+        adminState: Boolean
+    ) {
+        repository.updatePonPortConfiguration(
+            portId = portId,
+            name = name,
+            txPowerDbm = txPowerDbm,
+            totalOnus = totalOnus,
+            adminState = adminState
+        )
+        _uiState.update {
+            it.copy(
+                settingsFeedbackMessage = "Updated PON port $name (Tx ${String.format("%+.1f", txPowerDbm)} dBm, Split 1:$totalOnus, Admin ${if (adminState) "UP" else "DOWN"})."
+            )
+        }
+    }
+
+    fun addNewPonPortConfig(
+        oltId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int = 64
+    ) {
+        repository.addPonPortConfiguration(
+            oltId = oltId,
+            name = name,
+            txPowerDbm = txPowerDbm,
+            totalOnus = totalOnus
+        )
+        _uiState.update {
+            it.copy(
+                settingsFeedbackMessage = "Added PON port $name (Tx ${String.format("%+.1f", txPowerDbm)} dBm, Split 1:$totalOnus) to OLT $oltId."
+            )
+        }
+    }
+
+    fun runDeepHardwareDiagnostics(oltId: String? = null) {
+        val targetId = oltId ?: _uiState.value.selectedSettingsOltId
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRunningHardwareDiag = true) }
+            val report = repository.runDeepHardwareDiagnostics(
+                oltId = targetId,
+                rwCommunity = _uiState.value.globalSnmpWriteCommunity,
+                snmpUdpPort = _uiState.value.globalSnmpUdpPort
+            )
+            _uiState.update {
+                it.copy(
+                    isRunningHardwareDiag = false,
+                    hardwareDiagnosticReport = report,
+                    settingsFeedbackMessage = "Deep SNMP & Optical DOM Diagnostics completed for ${report.oltName}."
+                )
+            }
+        }
+    }
+
+    fun clearSettingsFeedbackMessage() {
+        _uiState.update { it.copy(settingsFeedbackMessage = null) }
+    }
+
+    fun probeSingleOltLive(oltId: String) {
+        repository.probeSingleOltLive(oltId)
+    }
+
+    fun probeAllRealDevicesNow() {
+        repository.probeAllRealDevicesNow()
+        _uiState.update {
+            it.copy(
+                settingsFeedbackMessage = "Probed all OLTs & MikroTiks via ICMP, TCP Management & SNMPv2c."
+            )
+        }
+    }
+
+    fun clearPreloadedDevicesForRealUse() {
+        repository.clearPreloadedDevicesForRealUse()
+        _uiState.update {
+            it.copy(
+                hardwareDiagnosticReport = null,
+                settingsFeedbackMessage = "Cleared preloaded sample devices. Add or scan your real OLTs & MikroTiks."
+            )
+        }
+    }
 }
+

@@ -144,4 +144,21 @@ interface NocDao {
         notes: String,
         timestamp: Long = System.currentTimeMillis()
     )
+
+    // --- Real-Life Clean Workspace Operations ---
+    @Query("DELETE FROM olts")
+    suspend fun clearAllOlts()
+
+    @Query("DELETE FROM pon_ports")
+    suspend fun clearAllPonPorts()
+
+    @Query("DELETE FROM onus")
+    suspend fun clearAllOnus()
+
+    @Query("DELETE FROM mikrotiks")
+    suspend fun clearAllMikrotiks()
+
+    @Query("DELETE FROM interfaces")
+    suspend fun clearAllInterfaces()
 }
+

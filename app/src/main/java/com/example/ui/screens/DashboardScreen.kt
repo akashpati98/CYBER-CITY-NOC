@@ -47,6 +47,7 @@ fun DashboardScreen(
     val ipScanState by viewModel.ipScanState.collectAsState()
     val interfaces by viewModel.interfaces.collectAsState()
     val analytics by viewModel.computedAnalytics.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
 
     val totalOnus = onus.size
     val onlineOnus = onus.count { it.status == OnuStatus.ONLINE }
@@ -54,8 +55,9 @@ fun DashboardScreen(
     val criticalOnus = onus.count { it.status == OnuStatus.CRITICAL || it.status == OnuStatus.OFFLINE }
     val outOfNominalOnus = onus.count { it.isOutsideNominalRange(3.0f) }
 
+    val offlineOlts = olts.filter { it.status == DeviceStatus.OFFLINE }
     val unackedAlerts = alerts.filter { !it.isAcknowledged }
-    val criticalAlertsCount = unackedAlerts.count { it.severity == AlertSeverity.CRITICAL }
+    val criticalAlertsCount = unackedAlerts.count { it.severity == AlertSeverity.CRITICAL } + offlineOlts.size
 
     val totalRxBps = interfaces.filter { it.linkStatus == LinkStatus.UP }.sumOf { it.currentRxBps }
     val totalTxBps = interfaces.filter { it.linkStatus == LinkStatus.UP }.sumOf { it.currentTxBps }
@@ -84,7 +86,7 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
@@ -94,7 +96,9 @@ fun DashboardScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (criticalAlertsCount > 0) "NOC ATTENTION REQUIRED" else "SYSTEMS OPERATIONAL",
+                                    text = if (offlineOlts.isNotEmpty()) "CRITICAL: OLT OFFLINE ALERT"
+                                           else if (criticalAlertsCount > 0) "NOC ATTENTION REQUIRED"
+                                           else "SYSTEMS OPERATIONAL",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = if (criticalAlertsCount > 0) NocCriticalRed else NocSuccessGreen,
@@ -115,72 +119,122 @@ fun DashboardScreen(
                             )
                         }
 
-                        // Simulation test trigger menu button
+                        // Live SNMP & ICMP Poll Now button
                         OutlinedButton(
-                            onClick = { viewModel.restoreNormalNetwork() },
+                            onClick = { viewModel.probeAllRealDevicesNow() },
                             shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.testTag("reset_simulation_button"),
+                            modifier = Modifier.testTag("poll_all_devices_now_button"),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Reset", modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Sync, contentDescription = "Poll Now", modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Reset NOC", style = MaterialTheme.typography.labelMedium)
+                            Text("Poll Live", style = MaterialTheme.typography.labelMedium)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // Simulation scenario quick buttons
+                    // Dark Mode Switch Option Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (uiState.isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
+                                contentDescription = "Theme Mode",
+                                tint = if (uiState.isDarkMode) NocWarningAmber else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = if (uiState.isDarkMode) "Dark Mode Active (NOC Night Shift)" else "Light Mode Active (NOC Day Shift)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Switch between high-contrast dark & light NOC console theme",
+                                    fontSize = 10.sp,
+                                    color = NocTextSecondary
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = uiState.isDarkMode,
+                            onCheckedChange = { viewModel.setDarkMode(it) },
+                            modifier = Modifier.testTag("dark_mode_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Real-Life NOC Quick Operations (SNMP & Ports, Speedtest.net, Fast.com, LAN Discovery)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Button(
-                            onClick = { viewModel.triggerFiberCut("0/1/3") },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFE4E6), contentColor = NocCriticalRed),
+                            onClick = { viewModel.selectTab(NocNavTab.SETTINGS) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             modifier = Modifier
-                                .weight(1f)
-                                .testTag("sim_fiber_cut_button")
+                                .weight(1.15f)
+                                .testTag("dashboard_open_settings_button")
                         ) {
-                            Text("Fiber Cut", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("SNMP & Ports", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
-                            onClick = { viewModel.triggerTrafficSpike() },
+                            onClick = {
+                                viewModel.selectWebSpeedTestProvider(com.example.data.SpeedTestProvider.SPEEDTEST_NET)
+                                viewModel.selectTab(NocNavTab.TOOLS)
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0F2FE), contentColor = NocPrimaryBlue),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                             modifier = Modifier
-                                .weight(1f)
-                                .testTag("sim_traffic_spike_button")
+                                .weight(1.1f)
+                                .testTag("dashboard_speedtest_net_button")
                         ) {
-                            Text("Traffic Spike", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("Speedtest.net", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
-                            onClick = { viewModel.triggerOpticalDegradation("onu-102") },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFEF3C7), contentColor = NocWarningAmber),
+                            onClick = {
+                                viewModel.selectWebSpeedTestProvider(com.example.data.SpeedTestProvider.FAST_COM)
+                                viewModel.selectTab(NocNavTab.TOOLS)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFE4E6), contentColor = NocCriticalRed),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                             modifier = Modifier
-                                .weight(1f)
-                                .testTag("sim_degrade_onu_button")
+                                .weight(0.95f)
+                                .testTag("dashboard_fast_com_button")
                         ) {
-                            Text("Low Rx (-3dB)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("Fast.com", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
 
                         Button(
-                            onClick = { viewModel.triggerHighOpticalOverload("onu-101") },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3E8FF), contentColor = Color(0xFF7E22CE)),
+                            onClick = { viewModel.detectLocalSubnetAndScan() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFECFDF5), contentColor = NocSuccessGreen),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                             modifier = Modifier
-                                .weight(1f)
-                                .testTag("sim_high_power_onu_button")
+                                .weight(0.95f)
+                                .testTag("dashboard_lan_scan_button")
                         ) {
-                            Text("High Rx (+3dB)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("LAN Scan", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -237,6 +291,159 @@ fun DashboardScreen(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+            }
+        }
+
+        // OLT Offline Alert & Reachability Watchdog Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("olt_offline_alert_dashboard_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (offlineOlts.isNotEmpty())
+                        NocCriticalRed.copy(alpha = 0.08f)
+                    else MaterialTheme.colorScheme.surface
+                ),
+                shape = RoundedCornerShape(16.dp),
+                border = if (offlineOlts.isNotEmpty())
+                    androidx.compose.foundation.BorderStroke(1.5.dp, NocCriticalRed)
+                else CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (offlineOlts.isNotEmpty()) Color(0xFFFFE4E6) else Color(0xFFECFDF5)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (offlineOlts.isNotEmpty()) Icons.Default.NotificationsActive else Icons.Default.Hub,
+                                    contentDescription = "OLT Offline Alert Monitor",
+                                    tint = if (offlineOlts.isNotEmpty()) NocCriticalRed else NocSuccessGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (offlineOlts.isNotEmpty())
+                                        "OLT OFFLINE ALERT ACTIVE (${offlineOlts.size}/${olts.size} OFFLINE)"
+                                    else "OLT Reachability & Offline Alert Monitor",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (offlineOlts.isNotEmpty()) NocCriticalRed else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "SNMP/ICMP Heartbeat Watchdog • Auto-Dispatches Email & Webhook on OLT Down",
+                                    fontSize = 11.sp,
+                                    color = NocTextSecondary
+                                )
+                            }
+                        }
+
+                        TextButton(
+                            onClick = { viewModel.selectTab(NocNavTab.ALERTS) },
+                            modifier = Modifier.testTag("olt_offline_card_view_alerts_btn")
+                        ) {
+                            Text("Alert Feed", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        olts.forEach { olt ->
+                            val isOffline = olt.status == DeviceStatus.OFFLINE
+                            val oltOnuCount = onus.count { it.oltId == olt.id }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isOffline) NocCriticalRed.copy(alpha = 0.14f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isOffline) NocCriticalRed else NocSuccessGreen)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "${olt.name} (${olt.vendor.displayName})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isOffline) NocCriticalRed else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Text(
+                                        text = if (isOffline)
+                                            "OFFLINE ALERT • ${olt.ipAddress} Unreachable (100% Loss) • $oltOnuCount ONUs Down"
+                                        else "${olt.ipAddress}:${olt.port} • Latency ${String.format("%.1f", olt.avgLatencyMs)}ms • $oltOnuCount ONUs Online",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isOffline) NocCriticalRed else NocTextSecondary
+                                    )
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (isOffline) {
+                                        Button(
+                                            onClick = { viewModel.restoreOltOnline(olt.id) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = NocSuccessGreen, contentColor = Color.White),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("restore_olt_btn_${olt.id}")
+                                        ) {
+                                            Text("Re-Probe Online", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = { viewModel.probeSingleOltLive(olt.id) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("probe_olt_now_btn_${olt.id}")
+                                        ) {
+                                            Text("Live Probe", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                viewModel.selectSettingsOlt(olt.id)
+                                                viewModel.selectTab(NocNavTab.SETTINGS)
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("config_olt_snmp_btn_${olt.id}")
+                                        ) {
+                                            Text("SNMP", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

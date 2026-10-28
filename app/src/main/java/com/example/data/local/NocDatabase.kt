@@ -27,18 +27,31 @@ abstract class NocDatabase : RoomDatabase() {
     companion object {
         @Volatile
         private var INSTANCE: NocDatabase? = null
+        @Volatile
+        private var lastAppContext: Context? = null
 
         fun getDatabase(context: Context): NocDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    NocDatabase::class.java,
-                    "netpulse_noc.db"
-                )
-                    .fallbackToDestructiveMigration()
-                    .build()
-                INSTANCE = instance
-                instance
+            val appCtx = context.applicationContext
+            val existing = INSTANCE
+            if (existing != null && lastAppContext === appCtx && existing.isOpen) {
+                return existing
+            }
+            return synchronized(this) {
+                val current = INSTANCE
+                if (current != null && lastAppContext === appCtx && current.isOpen) {
+                    current
+                } else {
+                    val instance = Room.databaseBuilder(
+                        appCtx,
+                        NocDatabase::class.java,
+                        "netpulse_noc.db"
+                    )
+                        .fallbackToDestructiveMigration()
+                        .build()
+                    INSTANCE = instance
+                    lastAppContext = appCtx
+                    instance
+                }
             }
         }
     }

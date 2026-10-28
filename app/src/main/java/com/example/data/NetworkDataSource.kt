@@ -672,7 +672,7 @@ object NetworkDataSource {
             id = "fms_bsnl",
             name = "BSNL FTTH FMS Portal",
             shortName = "BSNL FMS",
-            url = "https://fms.bsnl.in/login",
+            url = "https://fms.bsnl.in/",
             username = "bsnl_partner_cc",
             password = "Bsnl@NocPass2026",
             partnerCode = "SSA-KOL-FTTH-09",

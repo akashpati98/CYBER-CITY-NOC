@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AlertSeverity
+import com.example.model.AlertTargetType
 import com.example.model.AlertThresholdSettings
 import com.example.ui.NocViewModel
 import com.example.ui.theme.*
@@ -33,12 +34,16 @@ fun AlertsScreen(
 
     var selectedFilter by remember { mutableStateOf<AlertSeverity?>(null) }
     var showOnlyUnacked by remember { mutableStateOf(false) }
+    var showOnlyOltOffline by remember { mutableStateOf(false) }
 
-    val filteredAlerts = remember(alerts, selectedFilter, showOnlyUnacked) {
+    val filteredAlerts = remember(alerts, selectedFilter, showOnlyUnacked, showOnlyOltOffline) {
         alerts.filter { alert ->
             val matchSeverity = selectedFilter == null || alert.severity == selectedFilter
             val matchAck = !showOnlyUnacked || !alert.isAcknowledged
-            matchSeverity && matchAck
+            val matchOltOffline = !showOnlyOltOffline ||
+                (alert.targetType == AlertTargetType.OLT &&
+                    (alert.title.contains("Offline", ignoreCase = true) || alert.title.contains("Unreachable", ignoreCase = true)))
+            matchSeverity && matchAck && matchOltOffline
         }
     }
 
@@ -121,26 +126,43 @@ fun AlertsScreen(
                             text = "Automated Alert Triggers & Dispatch Channels",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
                         )
 
-                        Button(
-                            onClick = { viewModel.sendTestEmailAndWebhookAlert() },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(30.dp)
-                                .testTag("test_email_webhook_btn")
-                        ) {
-                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(13.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Test Dispatch", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.probeAllRealDevicesNow() },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("alerts_probe_all_olts_btn")
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Probe All OLTs", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = { viewModel.sendTestEmailAndWebhookAlert() },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("test_email_webhook_btn")
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Verify Dispatch", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "• Device Reachability: Alert when any OLT or MikroTik becomes unreachable\n" +
+                        text = "• OLT Offline Alert: Immediate CRITICAL alert when any OLT becomes unreachable (SNMP/ICMP 100% loss)\n" +
+                                "• Device Reachability: Alert when any MikroTik router becomes unreachable\n" +
                                 "• Interface State: Alert when any monitored interface changes to DOWN\n" +
                                 "• ONU Power (±${thresholds.onuNominalToleranceDb} dBm from ${thresholds.onuNominalPowerDbm} dBm): High > ${String.format("%.1f", highLimit)} dBm | Low < ${String.format("%.1f", lowLimit)} dBm | Crit < ${thresholds.onuRxCriticalThresholdDbm} dBm",
                         style = MaterialTheme.typography.bodySmall,
@@ -185,37 +207,39 @@ fun AlertsScreen(
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 FilterChip(
-                    selected = selectedFilter == null && !showOnlyUnacked,
+                    selected = selectedFilter == null && !showOnlyUnacked && !showOnlyOltOffline,
                     onClick = {
                         selectedFilter = null
                         showOnlyUnacked = false
+                        showOnlyOltOffline = false
                     },
-                    label = { Text("All (${alerts.size})") }
+                    label = { Text("All (${alerts.size})", fontSize = 11.sp) }
+                )
+                FilterChip(
+                    selected = showOnlyOltOffline,
+                    onClick = { showOnlyOltOffline = !showOnlyOltOffline },
+                    label = { Text("OLT Offline", fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFFFE4E6),
+                        selectedLabelColor = NocCriticalRed
+                    ),
+                    modifier = Modifier.testTag("filter_olt_offline_chip")
                 )
                 FilterChip(
                     selected = showOnlyUnacked,
                     onClick = { showOnlyUnacked = !showOnlyUnacked },
-                    label = { Text("Unacked (${alerts.count { !it.isAcknowledged }})") }
+                    label = { Text("Unacked (${alerts.count { !it.isAcknowledged }})", fontSize = 11.sp) }
                 )
                 FilterChip(
                     selected = selectedFilter == AlertSeverity.CRITICAL,
                     onClick = { selectedFilter = if (selectedFilter == AlertSeverity.CRITICAL) null else AlertSeverity.CRITICAL },
-                    label = { Text("Critical") },
+                    label = { Text("Critical", fontSize = 11.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = Color(0xFFFFE4E6),
                         selectedLabelColor = NocCriticalRed
-                    )
-                )
-                FilterChip(
-                    selected = selectedFilter == AlertSeverity.WARNING,
-                    onClick = { selectedFilter = if (selectedFilter == AlertSeverity.WARNING) null else AlertSeverity.WARNING },
-                    label = { Text("Warning") },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFFEF3C7),
-                        selectedLabelColor = NocWarningAmber
                     )
                 )
             }

@@ -47,7 +47,7 @@ class ExampleRobolectricTest {
         assertEquals(4, portals.size)
 
         val urls = portals.map { it.url }
-        assertTrue(urls.contains("https://fms.bsnl.in/login"))
+        assertTrue(urls.contains("https://fms.bsnl.in/"))
         assertTrue(urls.contains("https://partner.meghbelabroadband.in/Partner/Accounts.aspx"))
         assertTrue(urls.contains("https://partners.gtplkcbpl.com/partner"))
         assertTrue(urls.contains("https://cybercity.phpradius.com/admin"))
@@ -68,7 +68,7 @@ class ExampleRobolectricTest {
             id = "fms_test_bsnl",
             name = "BSNL Test FMS",
             shortName = "BSNL",
-            url = "https://fms.bsnl.in/login",
+            url = "https://fms.bsnl.in/",
             username = "test_user_bsnl",
             password = "InitialPassword#123",
             partnerCode = "SSA-TEST-01",
@@ -243,4 +243,102 @@ class ExampleRobolectricTest {
         assertTrue(speedState.uploadMbps > 0f)
         assertTrue(speedState.pingMs > 0f)
     }
+
+    @Test
+    fun `verify dark mode switch and olt offline alert`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = com.example.ui.NocViewModel(app)
+
+        // Verify Dark Mode Switch
+        assertFalse(viewModel.uiState.value.isDarkMode)
+        viewModel.toggleDarkMode()
+        assertTrue(viewModel.uiState.value.isDarkMode)
+        viewModel.setDarkMode(false)
+        assertFalse(viewModel.uiState.value.isDarkMode)
+
+        // Verify OLT Offline Alert & Persistence
+        val repo = com.example.data.NetworkRepository.getInstance(app)
+        val createdAlert = repo.executeOltOfflineAlert("olt-zte-02")
+        assertNotNull(createdAlert)
+        assertEquals("olt-zte-02", createdAlert?.targetId)
+        assertEquals(AlertSeverity.CRITICAL, createdAlert?.severity)
+        assertTrue(createdAlert?.title?.contains("OLT Offline Alert", ignoreCase = true) == true)
+
+        val db = NocDatabase.getDatabase(app)
+        val dao = db.nocDao()
+        val alertsAfterOffline = dao.getAllAlerts().first()
+        assertTrue(
+            alertsAfterOffline.any {
+                it.targetId == "olt-zte-02" &&
+                    it.title.contains("OLT Offline Alert", ignoreCase = true) &&
+                    it.severityName == AlertSeverity.CRITICAL.name
+            }
+        )
+    }
+
+    @Test
+    fun `verify speedtest net and fast com integration`() = runBlocking {
+        // Verify URLs and labels for Speedtest.net and Fast.com
+        assertEquals("https://www.speedtest.net/", com.example.data.SpeedTestProvider.SPEEDTEST_NET.webUrl)
+        assertEquals("https://fast.com/", com.example.data.SpeedTestProvider.FAST_COM.webUrl)
+
+        val speedtestNetResult = RealNetworkProbe.runSpeedTest(
+            provider = com.example.data.SpeedTestProvider.SPEEDTEST_NET,
+            onProgress = {}
+        )
+        assertFalse(speedtestNetResult.isRunning)
+        assertEquals(com.example.data.SpeedTestProvider.SPEEDTEST_NET, speedtestNetResult.provider)
+        assertTrue(speedtestNetResult.downloadMbps > 0f)
+        assertTrue(speedtestNetResult.uploadMbps > 0f)
+
+        val fastComResult = RealNetworkProbe.runSpeedTest(
+            provider = com.example.data.SpeedTestProvider.FAST_COM,
+            onProgress = {}
+        )
+        assertFalse(fastComResult.isRunning)
+        assertEquals(com.example.data.SpeedTestProvider.FAST_COM, fastComResult.provider)
+        assertTrue(fastComResult.downloadMbps > 0f)
+    }
+
+    @Test
+    fun `verify snmp community strings olt port config and deep hardware diagnostics`() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val repo = com.example.data.NetworkRepository.getInstance(app)
+
+        // Update OLT SNMP community string and port config
+        val updatedOlt = repo.updateOltSnmpAndPortConfigNow(
+            oltId = "olt-huawei-01",
+            ipAddress = "10.100.1.10",
+            port = 161,
+            snmpCommunity = "cybercity_ro_2026",
+            totalPonPorts = 16
+        )
+        assertNotNull(updatedOlt)
+        assertEquals("cybercity_ro_2026", updatedOlt?.snmpCommunity)
+        assertEquals(161, updatedOlt?.port)
+        assertEquals(16, updatedOlt?.totalPonPorts)
+
+        // Update PON port optical configuration
+        val firstPon = NetworkDataSource.getInitialPonPorts().first { it.oltId == "olt-huawei-01" }
+        val updatedPon = repo.updatePonPortConfigurationNow(
+            portId = firstPon.id,
+            name = "GPON 0/1/0 (Trunk-C++)",
+            txPowerDbm = 5.8f,
+            totalOnus = 128,
+            adminState = true
+        )
+        assertNotNull(updatedPon)
+        assertEquals("GPON 0/1/0 (Trunk-C++)", updatedPon?.name)
+        assertEquals(5.8f, updatedPon?.txPowerDbm ?: 0f, 0.01f)
+        assertEquals(128, updatedPon?.totalOnus)
+
+        // Run deep SNMP hardware diagnostics
+        val report = repo.runDeepHardwareDiagnostics("olt-huawei-01", "cybercity_rw_2026")
+        assertEquals("olt-huawei-01", report.oltId)
+        assertEquals("cybercity_ro_2026", report.snmpCommunityUsed)
+        assertEquals("cybercity_rw_2026", report.snmpRwCommunityUsed)
+        assertTrue(report.ponPortDiagnostics.isNotEmpty())
+        assertTrue(report.sysObjectIdOid.startsWith("1.3.6.1.4.1."))
+    }
 }
+

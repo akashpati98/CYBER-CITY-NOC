@@ -2,6 +2,7 @@ package com.example.ui.theme
 
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -31,22 +32,44 @@ private val LightColorScheme = lightColorScheme(
     onError = Color.White
 )
 
+private val DarkColorScheme = darkColorScheme(
+    primary = NocDarkPrimaryBlue,
+    onPrimary = Color(0xFF082F49),
+    primaryContainer = Color(0xFF0369A1),
+    onPrimaryContainer = Color(0xFFE0F2FE),
+    secondary = NocDarkSecondaryTeal,
+    onSecondary = Color(0xFF042F2E),
+    secondaryContainer = Color(0xFF115E59),
+    onSecondaryContainer = Color(0xFFCCFBF1),
+    tertiary = NocTertiaryIndigo,
+    background = NocDarkBackground,
+    onBackground = NocDarkTextPrimary,
+    surface = NocDarkSurface,
+    onSurface = NocDarkTextPrimary,
+    surfaceVariant = NocDarkSurfaceVariant,
+    onSurfaceVariant = NocDarkTextSecondary,
+    outline = NocDarkBorder,
+    error = NocCriticalRed,
+    onError = Color.White
+)
+
 @Composable
 fun MyApplicationTheme(
     darkTheme: Boolean = false,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = LightColorScheme
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window
             window?.let {
-                it.statusBarColor = NocLightBackground.toArgb()
-                it.navigationBarColor = NocLightBackground.toArgb()
-                WindowCompat.getInsetsController(it, view).isAppearanceLightStatusBars = true
-                WindowCompat.getInsetsController(it, view).isAppearanceLightNavigationBars = true
+                val barColor = if (darkTheme) NocDarkBackground.toArgb() else NocLightBackground.toArgb()
+                it.statusBarColor = barColor
+                it.navigationBarColor = barColor
+                WindowCompat.getInsetsController(it, view).isAppearanceLightStatusBars = !darkTheme
+                WindowCompat.getInsetsController(it, view).isAppearanceLightNavigationBars = !darkTheme
             }
         }
     }
@@ -57,3 +80,4 @@ fun MyApplicationTheme(
         content = content
     )
 }
+

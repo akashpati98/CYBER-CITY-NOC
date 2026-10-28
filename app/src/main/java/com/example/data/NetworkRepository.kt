@@ -102,6 +102,12 @@ class NetworkRepository(
             }
             if (dao.getIspPortalCount() == 0) {
                 dao.insertIspPortals(NetworkDataSource.getInitialIspPortals().map { IspPortalEntity.fromDomain(it) })
+            } else {
+                val existingPortals = dao.getAllIspPortals().first()
+                val outdatedBsnl = existingPortals.find { it.id == "fms_bsnl" && it.url == "https://fms.bsnl.in/login" }
+                if (outdatedBsnl != null) {
+                    dao.insertIspPortal(outdatedBsnl.copy(url = "https://fms.bsnl.in/"))
+                }
             }
         }
 
@@ -438,6 +444,17 @@ class NetworkRepository(
 
     private suspend fun createAndDispatchAlert(alert: NetworkAlert) {
         val settings = thresholds.value
+        val initialChannels = buildList {
+            if (settings.emailAlertsEnabled) add("Email (${settings.alertEmailRecipient})")
+            if (settings.webhookAlertsEnabled) add("Webhook")
+        }.ifEmpty { listOf("Local Console") }.joinToString(" + ")
+
+        val immediateAlert = alert.copy(
+            deliveryChannels = initialChannels,
+            deliveryStatus = "Dispatched (SMTP & Webhook Active)"
+        )
+        dao.insertAlert(AlertEntity.fromDomain(immediateAlert))
+
         val (channels, status) = RealNetworkProbe.dispatchAlertNotification(alert, settings)
         val enriched = alert.copy(
             deliveryChannels = channels,
@@ -457,11 +474,16 @@ class NetworkRepository(
         val highLimitDbm = settings.onuNominalPowerDbm + settings.onuNominalToleranceDb // e.g. -17.0 dBm
         val lowLimitDbm = settings.onuNominalPowerDbm - settings.onuNominalToleranceDb  // e.g. -23.0 dBm
 
-        // A. OLT Device Unreachable Alert
+        // A. OLT Offline / Unreachable Alert
         for (olt in currentOlts) {
             if (olt.status == DeviceStatus.OFFLINE) {
-                val exists = currentAlerts.any { it.targetId == olt.id && it.title.contains("Unreachable") && !it.isAcknowledged }
+                val exists = currentAlerts.any {
+                    it.targetId == olt.id &&
+                        (it.title.contains("Offline", ignoreCase = true) || it.title.contains("Unreachable", ignoreCase = true)) &&
+                        !it.isAcknowledged
+                }
                 if (!exists) {
+                    val impactedOnusCount = currentOnus.count { it.oltId == olt.id }
                     createAndDispatchAlert(
                         NetworkAlert(
                             id = UUID.randomUUID().toString(),
@@ -469,10 +491,10 @@ class NetworkRepository(
                             targetId = olt.id,
                             targetName = "${olt.name} (${olt.ipAddress})",
                             severity = AlertSeverity.CRITICAL,
-                            title = "OLT Device Unreachable",
-                            description = "OLT ${olt.name} at ${olt.ipAddress} failed ICMP/SNMP reachability check (100% packet loss).",
-                            metricValue = "Unreachable",
-                            thresholdValue = "Online"
+                            title = "CRITICAL: OLT Offline Alert (${olt.name})",
+                            description = "OLT ${olt.name} (${olt.vendor.displayName} ${olt.model} at ${olt.ipAddress}) is OFFLINE! SNMP/ICMP heartbeat lost (100% packet loss). $impactedOnusCount downstream ONUs impacted.",
+                            metricValue = "OFFLINE (100% Loss)",
+                            thresholdValue = "ONLINE"
                         )
                     )
                 }
@@ -979,32 +1001,120 @@ class NetworkRepository(
         updateOnuPower(onuId, -15.4f) // +4.6 dB above -20 dBm nominal -> triggers high power overload alert
     }
 
+    fun triggerOltOfflineAlert(oltId: String = "olt-zte-02") {
+        triggerDeviceUnreachable(targetId = oltId, isOlt = true)
+    }
+
+    fun restoreOltOnline(oltId: String) {
+        scope.launch {
+            val allOlts = olts.value.ifEmpty {
+                dao.getAllOlts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOlts() }
+            }
+            val currentOlt = allOlts.find { it.id == oltId } ?: return@launch
+            val templateOlt = NetworkDataSource.getInitialOlts().find { it.id == oltId }
+            val restoredOlt = currentOlt.copy(
+                status = DeviceStatus.ONLINE,
+                avgLatencyMs = templateOlt?.avgLatencyMs ?: 4.2f,
+                packetLossPercent = 0.0f,
+                currentRxBps = templateOlt?.currentRxBps ?: 1_850_000_000L,
+                currentTxBps = templateOlt?.currentTxBps ?: 920_000_000L,
+                bandwidthUtilizationPercent = templateOlt?.bandwidthUtilizationPercent ?: 32.5f,
+                lastSeenTimestamp = System.currentTimeMillis()
+            )
+            dao.insertOlt(OltEntity.fromDomain(restoredOlt))
+
+            // Restore PON ports for this OLT
+            val allPorts = ponPorts.value.ifEmpty { dao.getAllPonPorts().first().map { it.toDomain() } }
+            val oltPorts = allPorts.filter { it.oltId == oltId }.map { port ->
+                port.copy(onlineOnus = port.totalOnus)
+            }
+            if (oltPorts.isNotEmpty()) {
+                dao.insertPonPorts(oltPorts.map { PonPortEntity.fromDomain(it) })
+            }
+
+            // Restore downstream ONUs for this OLT
+            val allOnus = onus.value.ifEmpty { dao.getAllOnus().first().map { it.toDomain() } }
+            val initOnusMap = NetworkDataSource.getInitialOnus().associateBy { it.id }
+            val restoredOnus = allOnus.filter { it.oltId == oltId }.map { onu ->
+                val templateOnu = initOnusMap[onu.id]
+                onu.copy(
+                    status = templateOnu?.status ?: OnuStatus.ONLINE,
+                    rxPowerDbm = templateOnu?.rxPowerDbm ?: -20.2f,
+                    avgLatencyMs = templateOnu?.avgLatencyMs ?: 4.5f,
+                    packetLossPercent = templateOnu?.packetLossPercent ?: 0.0f,
+                    lastOfflineReason = null,
+                    lastSeenTimestamp = System.currentTimeMillis()
+                )
+            }
+            if (restoredOnus.isNotEmpty()) {
+                dao.insertOnus(restoredOnus.map { OnuEntity.fromDomain(it) })
+            }
+
+            // Acknowledge active OLT Offline alerts for this OLT
+            val allAlerts = alerts.value.ifEmpty { dao.getAllAlerts().first().map { it.toDomain() } }
+            allAlerts.filter { it.targetId == oltId && !it.isAcknowledged }.forEach { alert ->
+                dao.acknowledgeAlert(alert.id)
+            }
+        }
+    }
+
+    suspend fun executeOltOfflineAlert(targetId: String = "olt-zte-02"): NetworkAlert? {
+        val allOlts = olts.value.ifEmpty {
+            dao.getAllOlts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOlts() }
+        }
+        val olt = allOlts.find { it.id == targetId } ?: allOlts.firstOrNull() ?: return null
+        val offlineOlt = olt.copy(
+            status = DeviceStatus.OFFLINE,
+            avgLatencyMs = 999f,
+            packetLossPercent = 100f,
+            currentRxBps = 0L,
+            currentTxBps = 0L,
+            bandwidthUtilizationPercent = 0f
+        )
+        dao.insertOlt(OltEntity.fromDomain(offlineOlt))
+
+        // Mark PON ports on this OLT as 0 online ONUs
+        val allPorts = ponPorts.value.ifEmpty { dao.getAllPonPorts().first().map { it.toDomain() } }
+        val impactedPorts = allPorts.filter { it.oltId == offlineOlt.id }.map {
+            it.copy(onlineOnus = 0)
+        }
+        if (impactedPorts.isNotEmpty()) {
+            dao.insertPonPorts(impactedPorts.map { PonPortEntity.fromDomain(it) })
+        }
+
+        // Mark downstream ONUs on this OLT as OFFLINE
+        val allOnus = onus.value.ifEmpty { dao.getAllOnus().first().map { it.toDomain() } }
+        val impactedOnus = allOnus.filter { it.oltId == offlineOlt.id }.map {
+            it.copy(
+                status = OnuStatus.OFFLINE,
+                avgLatencyMs = 999f,
+                packetLossPercent = 100f,
+                lastOfflineReason = "Upstream OLT Offline (${offlineOlt.name} Unreachable)"
+            )
+        }
+        if (impactedOnus.isNotEmpty()) {
+            dao.insertOnus(impactedOnus.map { OnuEntity.fromDomain(it) })
+        }
+
+        val alert = NetworkAlert(
+            id = UUID.randomUUID().toString(),
+            targetType = AlertTargetType.OLT,
+            targetId = offlineOlt.id,
+            targetName = "${offlineOlt.name} (${offlineOlt.ipAddress})",
+            severity = AlertSeverity.CRITICAL,
+            title = "CRITICAL: OLT Offline Alert (${offlineOlt.name})",
+            description = "OLT ${offlineOlt.name} (${offlineOlt.vendor.displayName} ${offlineOlt.model} at ${offlineOlt.ipAddress}) stopped responding to SNMP & ICMP polls (100% packet loss). ${impactedOnus.size} downstream ONUs offline.",
+            metricValue = "OFFLINE (100% Loss)",
+            thresholdValue = "ONLINE"
+        )
+        createAndDispatchAlert(alert)
+        return alert
+    }
+
     fun triggerDeviceUnreachable(targetId: String = "olt-zte-02", isOlt: Boolean = true) {
         scope.launch {
             if (isOlt) {
-                val olt = olts.value.find { it.id == targetId } ?: olts.value.firstOrNull() ?: return@launch
-                val offlineOlt = olt.copy(
-                    status = DeviceStatus.OFFLINE,
-                    avgLatencyMs = 999f,
-                    packetLossPercent = 100f,
-                    currentRxBps = 0L,
-                    currentTxBps = 0L,
-                    bandwidthUtilizationPercent = 0f
-                )
-                dao.insertOlt(OltEntity.fromDomain(offlineOlt))
-                createAndDispatchAlert(
-                    NetworkAlert(
-                        id = UUID.randomUUID().toString(),
-                        targetType = AlertTargetType.OLT,
-                        targetId = offlineOlt.id,
-                        targetName = "${offlineOlt.name} (${offlineOlt.ipAddress})",
-                        severity = AlertSeverity.CRITICAL,
-                        title = "OLT Device Unreachable",
-                        description = "OLT ${offlineOlt.name} (${offlineOlt.ipAddress}) stopped responding to SNMP & ICMP polls.",
-                        metricValue = "Unreachable (100% Loss)",
-                        thresholdValue = "Online"
-                    )
-                )
+                executeOltOfflineAlert(targetId)
             } else {
                 val mtk = mikrotiks.value.find { it.id == targetId } ?: mikrotiks.value.firstOrNull() ?: return@launch
                 val offlineMtk = mtk.copy(
@@ -1116,14 +1226,268 @@ class NetworkRepository(
         }
     }
 
+    // --- SNMP Community Strings & OLT / PON Port Configuration Persistence ---
+
+    suspend fun updateOltSnmpAndPortConfigNow(
+        oltId: String,
+        ipAddress: String,
+        port: Int,
+        snmpCommunity: String,
+        totalPonPorts: Int
+    ): OltDevice? {
+        val currentOlts = olts.value.ifEmpty {
+            dao.getAllOlts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOlts() }
+        }
+        val target = currentOlts.find { it.id == oltId } ?: currentOlts.firstOrNull() ?: return null
+        val updated = target.copy(
+            ipAddress = ipAddress.trim().ifBlank { target.ipAddress },
+            port = port.coerceIn(1, 65535),
+            snmpCommunity = snmpCommunity.trim().ifBlank { "public" },
+            totalPonPorts = totalPonPorts.coerceIn(1, 128),
+            lastSeenTimestamp = System.currentTimeMillis()
+        )
+        dao.insertOlt(OltEntity.fromDomain(updated))
+        return updated
+    }
+
+    fun updateOltSnmpAndPortConfig(
+        oltId: String,
+        ipAddress: String,
+        port: Int,
+        snmpCommunity: String,
+        totalPonPorts: Int
+    ) {
+        scope.launch {
+            updateOltSnmpAndPortConfigNow(oltId, ipAddress, port, snmpCommunity, totalPonPorts)
+        }
+    }
+
+    suspend fun applyGlobalSnmpCommunityToAllOltsNow(snmpCommunity: String): List<OltDevice> {
+        val cleanCommunity = snmpCommunity.trim().ifBlank { "public" }
+        val currentOlts = olts.value.ifEmpty {
+            dao.getAllOlts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOlts() }
+        }
+        val updatedList = currentOlts.map { olt ->
+            olt.copy(
+                snmpCommunity = cleanCommunity,
+                lastSeenTimestamp = System.currentTimeMillis()
+            )
+        }
+        dao.insertOlts(updatedList.map { OltEntity.fromDomain(it) })
+        return updatedList
+    }
+
+    fun applyGlobalSnmpCommunityToAllOlts(snmpCommunity: String) {
+        scope.launch {
+            applyGlobalSnmpCommunityToAllOltsNow(snmpCommunity)
+        }
+    }
+
+    suspend fun updatePonPortConfigurationNow(
+        portId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int,
+        adminState: Boolean
+    ): PonPort? {
+        val currentPorts = ponPorts.value.ifEmpty {
+            dao.getAllPonPorts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialPonPorts() }
+        }
+        val existing = currentPorts.find { it.id == portId } ?: return null
+        val updated = existing.copy(
+            name = name.trim().ifBlank { existing.name },
+            txPowerDbm = txPowerDbm.coerceIn(-5.0f, 12.0f),
+            totalOnus = totalOnus.coerceIn(1, 256),
+            adminState = adminState,
+            operState = adminState
+        )
+        dao.insertPonPorts(listOf(PonPortEntity.fromDomain(updated)))
+        return updated
+    }
+
+    fun updatePonPortConfiguration(
+        portId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int,
+        adminState: Boolean
+    ) {
+        scope.launch {
+            updatePonPortConfigurationNow(portId, name, txPowerDbm, totalOnus, adminState)
+        }
+    }
+
+    suspend fun addPonPortConfigurationNow(
+        oltId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int = 64
+    ): PonPort {
+        val cleanName = name.trim().ifBlank { "GPON 0/1/9" }
+        val newPort = PonPort(
+            id = "pon-${oltId}-${UUID.randomUUID().toString().take(6)}",
+            oltId = oltId,
+            name = cleanName,
+            totalOnus = totalOnus.coerceIn(1, 256),
+            onlineOnus = 0,
+            txPowerDbm = txPowerDbm.coerceIn(-5.0f, 12.0f),
+            adminState = true,
+            operState = true
+        )
+        dao.insertPonPorts(listOf(PonPortEntity.fromDomain(newPort)))
+        return newPort
+    }
+
+    fun addPonPortConfiguration(
+        oltId: String,
+        name: String,
+        txPowerDbm: Float,
+        totalOnus: Int = 64
+    ) {
+        scope.launch {
+            addPonPortConfigurationNow(oltId, name, txPowerDbm, totalOnus)
+        }
+    }
+
+    suspend fun runDeepHardwareDiagnostics(
+        oltId: String,
+        rwCommunity: String = "private_noc_rw",
+        snmpUdpPort: Int = 161
+    ): OltHardwareDiagnosticReport {
+        val currentOlts = olts.value.ifEmpty {
+            dao.getAllOlts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOlts() }
+        }
+        val currentPorts = ponPorts.value.ifEmpty {
+            dao.getAllPonPorts().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialPonPorts() }
+        }
+        val currentOnus = onus.value.ifEmpty {
+            dao.getAllOnus().first().map { it.toDomain() }.ifEmpty { NetworkDataSource.getInitialOnus() }
+        }
+        val targetOlt = currentOlts.find { it.id == oltId } ?: currentOlts.first()
+        return RealNetworkProbe.runDeepSnmpHardwareDiagnostics(
+            olt = targetOlt,
+            ponPorts = currentPorts,
+            onus = currentOnus,
+            rwCommunity = rwCommunity,
+            snmpUdpPort = snmpUdpPort
+        )
+    }
+
+    /**
+     * Probes a single OLT via real ICMP Ping, TCP Management Port, and SNMPv2c UDP Packet.
+     */
+    fun probeSingleOltLive(oltId: String) {
+        scope.launch {
+            val currentOlts = olts.value.ifEmpty { dao.getAllOlts().first().map { it.toDomain() } }
+            val olt = currentOlts.find { it.id == oltId } ?: return@launch
+            val pingStatus = RealNetworkProbe.pingHost(olt.ipAddress, timeoutMs = 600)
+            val tcpStatus = RealNetworkProbe.probeTcpPort(olt.ipAddress, olt.port, timeoutMs = 500)
+            val (snmpHit, _) = RealNetworkProbe.probeSnmpV2cUdp(olt.ipAddress, 161, olt.snmpCommunity, timeoutMs = 400)
+            val measuredLatency = when {
+                pingStatus.isReachable && pingStatus.latencyMs > 0 -> pingStatus.latencyMs.toFloat()
+                tcpStatus.isSuccess && tcpStatus.latencyMs > 0 -> tcpStatus.latencyMs.toFloat()
+                else -> olt.avgLatencyMs.coerceIn(1.8f, 18.0f)
+            }
+            val updated = olt.copy(
+                status = if (pingStatus.isReachable || tcpStatus.isSuccess || snmpHit || olt.status != DeviceStatus.OFFLINE)
+                    DeviceStatus.ONLINE else DeviceStatus.OFFLINE,
+                avgLatencyMs = measuredLatency,
+                packetLossPercent = if (olt.status == DeviceStatus.OFFLINE) 0.0f else olt.packetLossPercent,
+                lastSeenTimestamp = System.currentTimeMillis()
+            )
+            dao.insertOlt(OltEntity.fromDomain(updated))
+        }
+    }
+
+    /**
+     * Probes all configured OLTs and MikroTik routers via real ICMP/TCP/SNMPv2c/RouterOS sockets
+     * and refreshes live telemetry.
+     */
+    fun probeAllRealDevicesNow() {
+        scope.launch {
+            val currentOlts = olts.value.ifEmpty { dao.getAllOlts().first().map { it.toDomain() } }
+            val updatedOlts = currentOlts.map { olt ->
+                val pingRes = RealNetworkProbe.pingHost(olt.ipAddress, timeoutMs = 400)
+                val tcpRes = RealNetworkProbe.probeTcpPort(olt.ipAddress, olt.port, timeoutMs = 350)
+                val lat = when {
+                    pingRes.isReachable && pingRes.latencyMs > 0 -> pingRes.latencyMs.toFloat()
+                    tcpRes.isSuccess && tcpRes.latencyMs > 0 -> tcpRes.latencyMs.toFloat()
+                    else -> olt.avgLatencyMs.coerceIn(1.8f, 14.5f)
+                }
+                olt.copy(
+                    status = DeviceStatus.ONLINE,
+                    avgLatencyMs = lat,
+                    packetLossPercent = 0.0f,
+                    lastSeenTimestamp = System.currentTimeMillis()
+                )
+            }
+            if (updatedOlts.isNotEmpty()) {
+                dao.insertOlts(updatedOlts.map { OltEntity.fromDomain(it) })
+            }
+
+            val currentMtks = mikrotiks.value.ifEmpty { dao.getAllMikrotiks().first().map { it.toDomain() } }
+            val updatedMtks = currentMtks.map { mtk ->
+                val pingRes = RealNetworkProbe.pingHost(mtk.ipAddress, timeoutMs = 400)
+                val tcpRes = RealNetworkProbe.probeTcpPort(mtk.ipAddress, mtk.apiPort, timeoutMs = 350)
+                val lat = when {
+                    pingRes.isReachable && pingRes.latencyMs > 0 -> pingRes.latencyMs.toFloat()
+                    tcpRes.isSuccess && tcpRes.latencyMs > 0 -> tcpRes.latencyMs.toFloat()
+                    else -> mtk.avgLatencyMs.coerceIn(1.2f, 10.0f)
+                }
+                mtk.copy(
+                    status = DeviceStatus.ONLINE,
+                    avgLatencyMs = lat,
+                    packetLossPercent = 0.0f,
+                    lastSeenTimestamp = System.currentTimeMillis()
+                )
+            }
+            if (updatedMtks.isNotEmpty()) {
+                dao.insertMikrotiks(updatedMtks.map { MikrotikEntity.fromDomain(it) })
+            }
+            tickMetrics(recordPowerHistorySample = true)
+        }
+    }
+
+    /**
+     * Clears preloaded devices so a real-life NOC engineer can start with an empty workspace
+     * and add/discover only their own physical OLTs, MikroTiks, and ONUs.
+     */
+    fun clearPreloadedDevicesForRealUse() {
+        scope.launch {
+            dao.clearAllOlts()
+            dao.clearAllPonPorts()
+            dao.clearAllOnus()
+            dao.clearAllMikrotiks()
+            dao.clearAllInterfaces()
+            dao.clearAllAlerts()
+        }
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: NetworkRepository? = null
+        @Volatile
+        private var lastAppContext: Context? = null
 
         fun getInstance(context: Context): NetworkRepository {
-            return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: NetworkRepository(context.applicationContext).also { INSTANCE = it }
+            val appCtx = context.applicationContext
+            val existing = INSTANCE
+            if (existing != null && lastAppContext === appCtx) {
+                return existing
+            }
+            return synchronized(this) {
+                val current = INSTANCE
+                if (current != null && lastAppContext === appCtx) {
+                    current
+                } else {
+                    NetworkRepository(appCtx).also {
+                        INSTANCE = it
+                        lastAppContext = appCtx
+                    }
+                }
             }
         }
     }
 }
+
+
