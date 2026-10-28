@@ -1,0 +1,6 @@
+{
+  "name": "Cyber City Monitoring Tool",
+  "description": "Real-time OLT & MikroTik network monitoring system with traffic statistics, interface status, ONU optical power diagnostics, ping testing tool, and automated alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
